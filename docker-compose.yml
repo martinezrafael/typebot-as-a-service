@@ -1,12 +1,11 @@
+name: taas-production
+
 services:
 
   traefik:
     image: traefik:v3.6
-    container_name: taas-traefik
     restart: unless-stopped
     command:
-      - --api.dashboard=true
-      - --api.insecure=false
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=taas_proxy
@@ -14,30 +13,29 @@ services:
       - --entrypoints.websecure.address=:443
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
-      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik_certificates:/letsencrypt
+      - traefik_certs:/letsencrypt
     networks:
       - proxy
 
   typebot-db:
     image: postgres:16-alpine
-    container_name: taas-typebot-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: typebot
       POSTGRES_USER: typebot
-      POSTGRES_PASSWORD: ${POSTGRES_TYPEBOT_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_TYPEBOT_PASSWORD:?Configure a senha}
     volumes:
-      - typebot_db_data:/var/lib/postgresql/data
+      - typebot_db:/var/lib/postgresql/data
     networks:
-      - internal
+      - data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U typebot -d typebot"]
       interval: 10s
@@ -45,68 +43,63 @@ services:
       retries: 10
 
   typebot-builder:
-    image: baptistearno/typebot-builder:latest
-    container_name: taas-typebot-builder
+    image: baptistearno/typebot-builder:${TYPEBOT_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       typebot-db:
         condition: service_healthy
     environment:
-      NODE_ENV: production
       DATABASE_URL: postgresql://typebot:${POSTGRES_TYPEBOT_PASSWORD}@typebot-db:5432/typebot
       ENCRYPTION_SECRET: ${ENCRYPTION_SECRET}
       NEXTAUTH_URL: https://${TYPEBOT_DOMAIN}
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
-      NEXT_PUBLIC_VIEWER_URL: https://${TYPEBOT_DOMAIN}
+      NEXT_PUBLIC_VIEWER_URL: https://${VIEWER_DOMAIN}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      NODE_OPTIONS: --no-node-snapshot
     networks:
-      - internal
       - proxy
+      - data
     labels:
       - traefik.enable=true
       - traefik.docker.network=taas_proxy
-      - traefik.http.routers.typebot-builder.rule=Host(`${TYPEBOT_DOMAIN}`)
-      - traefik.http.routers.typebot-builder.entrypoints=websecure
-      - traefik.http.routers.typebot-builder.tls.certresolver=letsencrypt
-      - traefik.http.services.typebot-builder.loadbalancer.server.port=3000
+      - traefik.http.routers.builder.rule=Host(`${TYPEBOT_DOMAIN}`)
+      - traefik.http.routers.builder.entrypoints=websecure
+      - traefik.http.routers.builder.tls.certresolver=le
+      - traefik.http.services.builder.loadbalancer.server.port=3000
 
   typebot-viewer:
-    image: baptistearno/typebot-viewer:latest
-    container_name: taas-typebot-viewer
+    image: baptistearno/typebot-viewer:${TYPEBOT_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       typebot-db:
         condition: service_healthy
     environment:
-      NODE_ENV: production
       DATABASE_URL: postgresql://typebot:${POSTGRES_TYPEBOT_PASSWORD}@typebot-db:5432/typebot
       ENCRYPTION_SECRET: ${ENCRYPTION_SECRET}
       NEXTAUTH_URL: https://${TYPEBOT_DOMAIN}
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
-      NEXT_PUBLIC_VIEWER_URL: https://${TYPEBOT_DOMAIN}
+      NEXT_PUBLIC_VIEWER_URL: https://${VIEWER_DOMAIN}
+      NODE_OPTIONS: --no-node-snapshot
     networks:
-      - internal
       - proxy
+      - data
     labels:
       - traefik.enable=true
       - traefik.docker.network=taas_proxy
-      - traefik.http.routers.typebot-viewer.rule=Host(`${TYPEBOT_DOMAIN}`) && PathPrefix(`/api/v1`)
-      - traefik.http.routers.typebot-viewer.entrypoints=websecure
-      - traefik.http.routers.typebot-viewer.tls.certresolver=letsencrypt
-      - traefik.http.routers.typebot-viewer.priority=100
-      - traefik.http.services.typebot-viewer.loadbalancer.server.port=3000
+      - traefik.http.routers.viewer.rule=Host(`${VIEWER_DOMAIN}`)
+      - traefik.http.routers.viewer.entrypoints=websecure
+      - traefik.http.routers.viewer.tls.certresolver=le
+      - traefik.http.services.viewer.loadbalancer.server.port=3000
 
   chatwoot-db:
     image: pgvector/pgvector:pg16
-    container_name: taas-chatwoot-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: chatwoot
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_CHATWOOT_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_CHATWOOT_PASSWORD:?Configure a senha}
     volumes:
-      - chatwoot_db_data:/var/lib/postgresql/data
+      - chatwoot_db:/var/lib/postgresql/data
     networks:
-      - internal
+      - data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d chatwoot"]
       interval: 10s
@@ -115,16 +108,15 @@ services:
 
   chatwoot-redis:
     image: redis:7-alpine
-    container_name: taas-chatwoot-redis
     restart: unless-stopped
     command: >
       sh -c 'redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
-      - chatwoot_redis_data:/data
+      - chatwoot_redis:/data
     networks:
-      - internal
+      - data
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
@@ -132,8 +124,7 @@ services:
       retries: 10
 
   chatwoot:
-    image: chatwoot/chatwoot:latest
-    container_name: taas-chatwoot
+    image: chatwoot/chatwoot:${CHATWOOT_VERSION:-latest}
     restart: unless-stopped
     entrypoint: docker/entrypoints/rails.sh
     command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
@@ -156,24 +147,22 @@ services:
       POSTGRES_USERNAME: postgres
       POSTGRES_PASSWORD: ${POSTGRES_CHATWOOT_PASSWORD}
       REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot-redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
       ACTIVE_STORAGE_SERVICE: local
     volumes:
       - chatwoot_storage:/app/storage
     networks:
-      - internal
       - proxy
+      - data
     labels:
       - traefik.enable=true
       - traefik.docker.network=taas_proxy
       - traefik.http.routers.chatwoot.rule=Host(`${CHATWOOT_DOMAIN}`)
       - traefik.http.routers.chatwoot.entrypoints=websecure
-      - traefik.http.routers.chatwoot.tls.certresolver=letsencrypt
+      - traefik.http.routers.chatwoot.tls.certresolver=le
       - traefik.http.services.chatwoot.loadbalancer.server.port=3000
 
   chatwoot-worker:
-    image: chatwoot/chatwoot:latest
-    container_name: taas-chatwoot-worker
+    image: chatwoot/chatwoot:${CHATWOOT_VERSION:-latest}
     restart: unless-stopped
     entrypoint: docker/entrypoints/rails.sh
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
@@ -187,30 +176,28 @@ services:
       NODE_ENV: production
       INSTALLATION_ENV: docker
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
-      FRONTEND_URL: https://${CHATWOOT_DOMAIN}
       POSTGRES_HOST: chatwoot-db
       POSTGRES_PORT: 5432
       POSTGRES_DATABASE: chatwoot
       POSTGRES_USERNAME: postgres
       POSTGRES_PASSWORD: ${POSTGRES_CHATWOOT_PASSWORD}
       REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot-redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
       ACTIVE_STORAGE_SERVICE: local
     volumes:
       - chatwoot_storage:/app/storage
     networks:
-      - internal
+      - data
 
 networks:
   proxy:
     name: taas_proxy
-  internal:
-    name: taas_internal
+  data:
+    name: taas_data
     internal: true
 
 volumes:
-  traefik_certificates:
-  typebot_db_data:
-  chatwoot_db_data:
-  chatwoot_redis_data:
+  traefik_certs:
+  typebot_db:
+  chatwoot_db:
+  chatwoot_redis:
   chatwoot_storage:

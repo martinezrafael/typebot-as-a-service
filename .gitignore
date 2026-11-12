@@ -12,3 +12,6 @@ vendor/
 .vscode/
 .idea/
 backups/
+.env.local
+.env.production
+.backup/

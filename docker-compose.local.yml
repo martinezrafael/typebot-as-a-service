@@ -2,167 +2,149 @@ name: taas-local
 
 services:
 
-  mailpit:
-    image: axllent/mailpit:latest
-    container_name: taas-local-mailpit
-    restart: unless-stopped
-    ports:
-      - "8025:8025"
-
   typebot-db:
     image: postgres:16-alpine
-    container_name: taas-local-typebot-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: typebot
       POSTGRES_USER: typebot
-      POSTGRES_PASSWORD: ${POSTGRES_TYPEBOT_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_TYPEBOT_PASSWORD:?Configure a senha}
     volumes:
-      - typebot_db_data:/var/lib/postgresql/data
+      - typebot_db_local:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U typebot -d typebot"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 10
 
   typebot-builder:
-    image: baptistearno/typebot-builder:latest
-    container_name: taas-local-typebot-builder
+    image: baptistearno/typebot-builder:${TYPEBOT_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       typebot-db:
         condition: service_healthy
-    ports:
-      - "8080:3000"
     environment:
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: http://localhost:8080
+      NEXT_PUBLIC_VIEWER_URL: http://127.0.0.1:8081
       DATABASE_URL: postgresql://typebot:${POSTGRES_TYPEBOT_PASSWORD}@typebot-db:5432/typebot
       ENCRYPTION_SECRET: ${ENCRYPTION_SECRET}
-      NEXTAUTH_URL: http://localhost:8080
-      NEXT_PUBLIC_VIEWER_URL: http://localhost:8081
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
-      ADMIN_EMAIL: admin@localhost.dev
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
-      SMTP_HOST: mailpit
-      SMTP_PORT: "1025"
-      SMTP_SECURE: "false"
-      SMTP_AUTH_DISABLED: "true"
-      NEXT_PUBLIC_SMTP_FROM: "Typebot Local <noreply@localhost.dev>"
+      NODE_OPTIONS: --no-node-snapshot
+    ports:
+      - "8080:3000"
 
   typebot-viewer:
-    image: baptistearno/typebot-viewer:latest
-    container_name: taas-local-typebot-viewer
+    image: baptistearno/typebot-viewer:${TYPEBOT_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       typebot-db:
         condition: service_healthy
-    ports:
-      - "8081:3000"
     environment:
+      NEXTAUTH_URL: http://localhost:8080
+      NEXT_PUBLIC_VIEWER_URL: http://127.0.0.1:8081
       DATABASE_URL: postgresql://typebot:${POSTGRES_TYPEBOT_PASSWORD}@typebot-db:5432/typebot
       ENCRYPTION_SECRET: ${ENCRYPTION_SECRET}
-      NEXTAUTH_URL: http://localhost:8080
-      NEXT_PUBLIC_VIEWER_URL: http://localhost:8081
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NODE_OPTIONS: --no-node-snapshot
+    ports:
+      - "8081:3000"
 
   chatwoot-db:
     image: pgvector/pgvector:pg16
-    container_name: taas-local-chatwoot-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: chatwoot
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_CHATWOOT_PASSWORD}
     volumes:
-      - chatwoot_db_data:/var/lib/postgresql/data
+      - chatwoot_db_local:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d chatwoot"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 10
 
   chatwoot-redis:
     image: redis:7-alpine
-    container_name: taas-local-chatwoot-redis
     restart: unless-stopped
     command: >
       sh -c 'redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
-      - chatwoot_redis_data:/data
+      - chatwoot_redis_local:/data
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 10
 
-  # Roda uma vez: cria o schema e o seed inicial do Chatwoot
-  chatwoot-prepare:
-    image: chatwoot/chatwoot:latest
-    container_name: taas-local-chatwoot-prepare
-    restart: "no"
+  chatwoot:
+    image: chatwoot/chatwoot:${CHATWOOT_VERSION:-latest}
+    restart: unless-stopped
     entrypoint: docker/entrypoints/rails.sh
-    command: ["bundle", "exec", "rails", "db:chatwoot_prepare"]
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
     depends_on:
       chatwoot-db:
         condition: service_healthy
       chatwoot-redis:
         condition: service_healthy
-    environment: &chatwoot_env
+    environment:
       RAILS_ENV: production
       NODE_ENV: production
       INSTALLATION_ENV: docker
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
       FRONTEND_URL: http://localhost:3000
-      FORCE_SSL: "false"
-      ENABLE_ACCOUNT_SIGNUP: "false"
       POSTGRES_HOST: chatwoot-db
-      POSTGRES_PORT: "5432"
+      POSTGRES_PORT: 5432
       POSTGRES_DATABASE: chatwoot
       POSTGRES_USERNAME: postgres
       POSTGRES_PASSWORD: ${POSTGRES_CHATWOOT_PASSWORD}
       REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot-redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
       ACTIVE_STORAGE_SERVICE: local
-      MAILER_SENDER_EMAIL: "Chatwoot Local <noreply@localhost.dev>"
       SMTP_ADDRESS: mailpit
-      SMTP_PORT: "1025"
-      SMTP_AUTHENTICATION: ""
-      SMTP_ENABLE_STARTTLS_AUTO: "false"
+      SMTP_PORT: 1025
+      SMTP_AUTHENTICATION: none
     volumes:
-      - chatwoot_storage:/app/storage
-
-  chatwoot:
-    image: chatwoot/chatwoot:latest
-    container_name: taas-local-chatwoot
-    restart: unless-stopped
-    entrypoint: docker/entrypoints/rails.sh
-    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
-    depends_on:
-      chatwoot-prepare:
-        condition: service_completed_successfully
+      - chatwoot_storage_local:/app/storage
     ports:
-      - "3000:3000"
-    environment: *chatwoot_env
-    volumes:
-      - chatwoot_storage:/app/storage
+      - "127.0.0.1:3000:3000"
 
   chatwoot-worker:
-    image: chatwoot/chatwoot:latest
-    container_name: taas-local-chatwoot-worker
+    image: chatwoot/chatwoot:${CHATWOOT_VERSION:-latest}
     restart: unless-stopped
     entrypoint: docker/entrypoints/rails.sh
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     depends_on:
-      chatwoot-prepare:
-        condition: service_completed_successfully
-    environment: *chatwoot_env
+      chatwoot-db:
+        condition: service_healthy
+      chatwoot-redis:
+        condition: service_healthy
+    environment:
+      RAILS_ENV: production
+      NODE_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      POSTGRES_HOST: chatwoot-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: chatwoot
+      POSTGRES_USERNAME: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_CHATWOOT_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@chatwoot-redis:6379
+      ACTIVE_STORAGE_SERVICE: local
     volumes:
-      - chatwoot_storage:/app/storage
+      - chatwoot_storage_local:/app/storage
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
 
 volumes:
-  typebot_db_data:
-  chatwoot_db_data:
-  chatwoot_redis_data:
-  chatwoot_storage:
+  typebot_db_local:
+  chatwoot_db_local:
+  chatwoot_redis_local:
+  chatwoot_storage_local:
