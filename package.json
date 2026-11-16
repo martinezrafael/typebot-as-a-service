@@ -1,0 +1,26 @@
+{
+  "name": "typebot-as-a-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma de automação de atendimento WhatsApp como serviço",
+  "scripts": {
+    "setup": "bash scripts/bootstrap-infra.sh",
+    "help": "bash scripts/stack.sh help",
+
+    "local:validate": "bash scripts/stack.sh local-validate",
+    "local:up": "bash scripts/stack.sh local-up",
+    "local:down": "bash scripts/stack.sh local-down",
+    "local:status": "bash scripts/stack.sh local-status",
+    "local:logs": "bash scripts/stack.sh local-logs",
+
+    "local:restart": "docker compose --env-file .env.local -f docker-compose.local.yml up -d --force-recreate",
+    "local:build": "docker compose --env-file .env.local -f docker-compose.local.yml pull",
+    "local:ps": "docker compose --env-file .env.local -f docker-compose.local.yml ps",
+
+    "local:typebot:logs": "docker compose --env-file .env.local -f docker-compose.local.yml logs -f --tail=100 typebot-builder typebot-viewer",
+    "local:chatwoot:logs": "docker compose --env-file .env.local -f docker-compose.local.yml logs -f --tail=100 chatwoot chatwoot-worker",
+    "local:db:logs": "docker compose --env-file .env.local -f docker-compose.local.yml logs -f --tail=100 typebot-db chatwoot-db",
+
+    "local:validate:compose": "docker compose --env-file .env.local -f docker-compose.local.yml config --quiet"
+  }
+}
